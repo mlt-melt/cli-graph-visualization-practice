@@ -23,7 +23,7 @@
 - `test_repo_mode` — режим работы с тестовым репозиторием: одно из `local-path`, `remote-url`.
 - `output_mode` — режим вывода: одно из `ascii-tree`, `list` (на данном этапе влияет только на валидацию и отображение параметра).
 
-Пример: см. `config.example.ini`. Для запуска по умолчанию ожидается `./config.ini`.
+Пример: см. `configs/config.example.ini`. Для запуска по умолчанию ожидается `./configs/config.ini`.
 
 Обработка ошибок:
 - Отсутствие файла конфигурации.
@@ -38,25 +38,30 @@
 Запуск приложения (PowerShell):
 
 ```powershell
-# Использовать конфиг по умолчанию ./config.ini
+# Использовать конфиг по умолчанию ./configs/config.ini
 python .\main.py
 
 # Использовать конкретный файл конфигурации
-python .\main.py --config .\config.example.ini
+python .\main.py --config .\configs\config.example.ini
+
+# Этап 2: вывод прямых зависимостей (используется URL репозитория)
+# Ограничение прототипа: поддерживается только GitHub URL вида https://github.com/<owner>/<repo>
+python .\main.py --config .\configs\config.example.ini --action show-deps
 ```
 
 Запуск тестов (если недоступен `pytest`, используем стандартный модуль `unittest`):
 
 ```powershell
-python -m unittest -v
+# Явный поиск тестов в каталоге tests
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 ## 4. Примеры использования
 
-Успешный запуск с примером конфига:
+Успешный запуск с примером конфига (Этап 1):
 
 ```powershell
-python .\main.py --config .\config.example.ini
+python .\main.py --config .\configs\config.example.ini
 ```
 
 Пример вывода:
@@ -68,10 +73,10 @@ test_repo_mode=local-path
 output_mode=ascii-tree
 ```
 
-Демонстрация ошибок валидации (намеренно неверный конфиг `config.invalid.ini`):
+Демонстрация ошибок валидации (намеренно неверный конфиг `configs/config.invalid.ini`):
 
 ```powershell
-python .\main.py --config .\config.invalid.ini
+python .\main.py --config .\configs\config.invalid.ini
 ```
 
 Возможный вывод ошибок:
@@ -84,7 +89,22 @@ Configuration validation failed:
  - repo_source is not a valid URL (test_repo_mode=remote-url): example
 ```
 
+Пример вывода прямых зависимостей (Этап 2):
+
+```powershell
+python .\main.py --config .\configs\config.files.ini --action show-deps
+```
+
+Вывод (по одной зависимости в строке):
+
+```
+Newtonsoft.Json 13.0.1
+Serilog 2.12.0
+...
+```
+
 ## Примечания
 
 - На этом этапе приложение ничего не загружает из удалённых источников и не анализирует зависимости — только читает и валидирует конфигурацию.
-- На следующих этапах планируется реализация получения зависимостей и вывод в виде ASCII‑дерева.
+- Этап 2 добавляет загрузку репозитория по URL (ограничение: GitHub), поиск `.nuspec`/`.csproj` и извлечение прямых зависимостей. Менеджеры пакетов и сторонние библиотеки не используются.
+- На следующих этапах планируется визуализация зависимостей (например, ASCII‑дерево) и расширение поддерживаемых источников.
