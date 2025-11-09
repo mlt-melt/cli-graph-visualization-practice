@@ -1,0 +1,7 @@
+# Cyclic dependencies
+# A -> B -> C -> A (cycle)
+# D depends on A (enters the cycle)
+A: B
+B: C
+C: A
+D: A

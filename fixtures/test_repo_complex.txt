@@ -1,0 +1,10 @@
+# Complex graph with multiple features:
+# - Transitive dependencies (A -> B -> E)
+# - Shared dependencies (B and C both depend on E)
+# - Multiple levels (A -> B -> E -> F)
+A: B C
+B: D E
+C: E
+D:
+E: F
+F:

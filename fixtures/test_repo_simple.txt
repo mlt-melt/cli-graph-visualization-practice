@@ -1,0 +1,5 @@
+# Simple linear dependency chain
+# A depends on B, B depends on C, C has no dependencies
+A: B
+B: C
+C:

@@ -1,0 +1,8 @@
+# Diamond dependency pattern (transitive)
+# A depends on B and C
+# Both B and C depend on D
+# Result: A has transitive dependency on D through two paths
+A: B C
+B: D
+C: D
+D:
