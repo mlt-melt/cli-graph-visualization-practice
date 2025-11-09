@@ -210,6 +210,69 @@ class TestDependencyGraph(unittest.TestCase):
         self.assertIn("A", reverse_d)
         self.assertNotIn("C", reverse_d)  # C does not depend on D
 
+    def test_export_to_d2(self):
+        """Test D2 diagram export"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": []}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        d2_output = graph.export_to_d2()
+        self.assertIn("A -> B", d2_output)
+        self.assertIn("B -> C", d2_output)
+        self.assertIn("direction: down", d2_output)
+
+    def test_export_to_d2_with_cycle(self):
+        """Test D2 export with cycle highlighting"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": [("A", "*")]}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        d2_output = graph.export_to_d2()
+        self.assertIn("A -> B", d2_output)
+        self.assertIn("# Cycles detected:", d2_output)
+        self.assertIn("style.stroke: red", d2_output)
+
+    def test_ascii_tree_simple(self):
+        """Test ASCII tree formatting for simple chain"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": []}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        tree = graph.format_as_ascii_tree("A")
+        self.assertIn("└── A", tree)
+        self.assertIn("└── B", tree)
+        self.assertIn("└── C", tree)
+
+    def test_ascii_tree_with_cycle(self):
+        """Test ASCII tree marks circular references"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": [("A", "*")]}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        tree = graph.format_as_ascii_tree("A")
+        self.assertIn("[CIRCULAR]", tree)
+
+    def test_ascii_tree_diamond(self):
+        """Test ASCII tree for diamond pattern"""
+        repo_data = {
+            "A": [("B", "*"), ("C", "*")],
+            "B": [("D", "*")],
+            "C": [("D", "*")],
+            "D": [],
+        }
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        tree = graph.format_as_ascii_tree("A")
+        self.assertIn("├── B", tree)
+        self.assertIn("└── C", tree)
+        self.assertIn("│", tree)  # Should have vertical lines for tree structure
+
 
 if __name__ == "__main__":
     unittest.main()

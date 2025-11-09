@@ -1,0 +1,13 @@
+# Dependency Graph
+direction: down
+
+A -> B
+B -> C
+C -> A
+D -> A
+
+# Cycles detected:
+# Cycle 1: A -> B -> C -> A
+A -> B: {style.stroke: red; style.stroke-width: 3}
+B -> C: {style.stroke: red; style.stroke-width: 3}
+C -> A: {style.stroke: red; style.stroke-width: 3}

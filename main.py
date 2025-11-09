@@ -48,19 +48,26 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"--action",
-		choices=["print-config", "show-deps", "build-graph", "reverse-deps"],
+		choices=["print-config", "show-deps", "build-graph", "reverse-deps", "visualize", "ascii-tree"],
 		default="print-config",
 		help=(
 			"Action to perform. 'print-config' prints validated parameters (Stage 1). "
 			"'show-deps' downloads/parses repo and prints direct NuGet dependencies (Stage 2). "
 			"'build-graph' builds full transitive dependency graph and prints statistics (Stage 3). "
-			"'reverse-deps' finds all packages that depend on --target package (Stage 4)."
+			"'reverse-deps' finds all packages that depend on --target package (Stage 4). "
+			"'visualize' exports graph to D2 diagram format (Stage 5). "
+			"'ascii-tree' displays dependencies as ASCII tree (Stage 5)."
 		),
 	)
 	parser.add_argument(
 		"--target",
 		type=str,
 		help="Target package for reverse-deps action (required for --action=reverse-deps)",
+	)
+	parser.add_argument(
+		"--output",
+		type=str,
+		help="Output file path for visualize action (default: deps.d2)",
 	)
 	return parser.parse_args()
 
@@ -372,6 +379,136 @@ def main() -> int:
 				print(f"  {pkg}")
 		else:
 			print(f"No packages depend on '{target_package}'")
+		return 0
+
+	if args.action == "visualize":
+		# Stage 5: export graph to D2 diagram format
+		if DependencyGraph is None:
+			print("Internal error: dependency graph module not available", file=sys.stderr)
+			return 1
+
+		package_name = params["package_name"]
+		test_repo_mode = params["test_repo_mode"]
+		output_file = args.output or "deps.d2"
+
+		graph = DependencyGraph()
+
+		# Build the graph first (same logic as build-graph)
+		if test_repo_mode == "local-path":
+			repo_path = Path(params["repo_source"])
+			if not repo_path.exists():
+				print(f"Test repository file not found: {repo_path}", file=sys.stderr)
+				return 1
+			try:
+				test_repo_data = parse_test_repo(repo_path)
+				provider = create_test_dependency_provider(test_repo_data)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to parse test repository: {e}", file=sys.stderr)
+				return 1
+
+		elif test_repo_mode == "remote-url":
+			if fetch_github_repo_to_temp is None:
+				print("Internal error: repo fetch module not available", file=sys.stderr)
+				return 1
+			repo_url = params["repo_source"]
+			try:
+				with tempfile.TemporaryDirectory(prefix="deps_repo_") as tmpdir:
+					repo_root = fetch_github_repo_to_temp(repo_url, Path(tmpdir))
+					if repo_root is None:
+						print(
+							"Unsupported repository URL. Only GitHub repositories are supported.",
+							file=sys.stderr,
+						)
+						return 1
+
+					def real_provider(pkg_id: str):
+						proj_file = discover_project_file(Path(repo_root), pkg_id)
+						if proj_file is None:
+							return []
+						return list(parse_dependencies_from_project(proj_file))
+
+					graph.build_graph_dfs(package_name, real_provider)
+			except Exception as e:
+				print(f"Failed to fetch or parse repository: {e}", file=sys.stderr)
+				return 1
+
+		# Export to D2
+		d2_content = graph.export_to_d2()
+		Path(output_file).write_text(d2_content, encoding="utf-8")
+		print(f"D2 diagram exported to: {output_file}")
+		print(f"Nodes: {graph.node_count()}, Edges: {graph.edge_count()}")
+		if graph.has_cycles():
+			print(f"Warning: {len(graph.cycles)} cycle(s) detected (marked in red)")
+		
+		# Try to render with d2 if available
+		import shutil
+		if shutil.which("d2"):
+			png_file = output_file.replace(".d2", ".png")
+			import subprocess
+			try:
+				subprocess.run(["d2", output_file, png_file], check=True, capture_output=True)
+				print(f"PNG rendered to: {png_file}")
+			except subprocess.CalledProcessError:
+				print("Note: d2 command failed. Install d2 for automatic rendering.")
+		else:
+			print("Note: Install 'd2' tool to render diagrams automatically.")
+		return 0
+
+	if args.action == "ascii-tree":
+		# Stage 5: display dependencies as ASCII tree
+		if DependencyGraph is None:
+			print("Internal error: dependency graph module not available", file=sys.stderr)
+			return 1
+
+		package_name = params["package_name"]
+		test_repo_mode = params["test_repo_mode"]
+
+		graph = DependencyGraph()
+
+		# Build the graph first (same logic as build-graph)
+		if test_repo_mode == "local-path":
+			repo_path = Path(params["repo_source"])
+			if not repo_path.exists():
+				print(f"Test repository file not found: {repo_path}", file=sys.stderr)
+				return 1
+			try:
+				test_repo_data = parse_test_repo(repo_path)
+				provider = create_test_dependency_provider(test_repo_data)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to parse test repository: {e}", file=sys.stderr)
+				return 1
+
+		elif test_repo_mode == "remote-url":
+			if fetch_github_repo_to_temp is None:
+				print("Internal error: repo fetch module not available", file=sys.stderr)
+				return 1
+			repo_url = params["repo_source"]
+			try:
+				with tempfile.TemporaryDirectory(prefix="deps_repo_") as tmpdir:
+					repo_root = fetch_github_repo_to_temp(repo_url, Path(tmpdir))
+					if repo_root is None:
+						print(
+							"Unsupported repository URL. Only GitHub repositories are supported.",
+							file=sys.stderr,
+						)
+						return 1
+
+					def real_provider(pkg_id: str):
+						proj_file = discover_project_file(Path(repo_root), pkg_id)
+						if proj_file is None:
+							return []
+						return list(parse_dependencies_from_project(proj_file))
+
+					graph.build_graph_dfs(package_name, real_provider)
+			except Exception as e:
+				print(f"Failed to fetch or parse repository: {e}", file=sys.stderr)
+				return 1
+
+		# Format as ASCII tree
+		tree_output = graph.format_as_ascii_tree(package_name)
+		print(tree_output)
 		return 0
 
 	print("Unknown action", file=sys.stderr)

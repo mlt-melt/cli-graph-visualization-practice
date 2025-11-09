@@ -152,3 +152,64 @@ class DependencyGraph:
                         stack.append(dep)
         
         return reverse_deps
+
+    def export_to_d2(self) -> str:
+        """
+        Export dependency graph to D2 diagram language format.
+        Returns a string containing the D2 diagram definition.
+        """
+        lines = []
+        lines.append("# Dependency Graph")
+        lines.append("direction: down")
+        lines.append("")
+        
+        # Add all edges
+        for pkg_id, deps in sorted(self.nodes.items()):
+            for dep in sorted(deps):
+                lines.append(f"{pkg_id} -> {dep}")
+        
+        # Highlight cycles if present
+        if self.cycles:
+            lines.append("")
+            lines.append("# Cycles detected:")
+            for i, cycle in enumerate(self.cycles):
+                lines.append(f"# Cycle {i+1}: {' -> '.join(cycle)}")
+                # Mark cycle edges in red
+                for j in range(len(cycle) - 1):
+                    lines.append(f"{cycle[j]} -> {cycle[j+1]}: {{style.stroke: red; style.stroke-width: 3}}")
+        
+        return "\n".join(lines)
+
+    def format_as_ascii_tree(self, root_package: str) -> str:
+        """
+        Format dependency graph as ASCII tree starting from root_package.
+        Uses box-drawing characters for tree structure.
+        Detects and marks circular references.
+        """
+        if root_package not in self.nodes:
+            return f"Package '{root_package}' not found in graph"
+        
+        lines = []
+        visited_in_path: Set[str] = set()
+        
+        def render_tree(pkg: str, prefix: str, is_last: bool, path: Set[str]):
+            # Detect circular reference
+            if pkg in path:
+                lines.append(f"{prefix}{'└── ' if is_last else '├── '}{pkg} [CIRCULAR]")
+                return
+            
+            lines.append(f"{prefix}{'└── ' if is_last else '├── '}{pkg}")
+            
+            deps = sorted(self.nodes.get(pkg, []))
+            if not deps:
+                return
+            
+            new_path = path | {pkg}
+            for i, dep in enumerate(deps):
+                is_last_dep = (i == len(deps) - 1)
+                extension = "    " if is_last else "│   "
+                render_tree(dep, prefix + extension, is_last_dep, new_path)
+        
+        # Start rendering from root
+        render_tree(root_package, "", True, set())
+        return "\n".join(lines)
