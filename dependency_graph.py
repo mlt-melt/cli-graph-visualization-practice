@@ -114,3 +114,41 @@ class DependencyGraph:
                     queue.append(dep)
         visited.discard(package_id)  # exclude self
         return visited
+
+    def get_reverse_dependencies(self, target_package: str) -> Set[str]:
+        """
+        Find all packages that depend on target_package (directly or transitively).
+        Uses iterative traversal (non-recursive).
+        
+        Returns set of package IDs that have target_package in their dependency tree.
+        """
+        reverse_deps: Set[str] = set()
+        
+        # Check each node in the graph
+        for pkg_id in self.nodes:
+            if pkg_id == target_package:
+                continue
+            
+            # Use iterative DFS to check if target is reachable from pkg_id
+            visited: Set[str] = set()
+            stack = [pkg_id]
+            found = False
+            
+            while stack and not found:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                
+                # Check if we reached the target
+                if current == target_package:
+                    reverse_deps.add(pkg_id)
+                    found = True
+                    break
+                
+                # Add children to stack
+                for dep in self.nodes.get(current, []):
+                    if dep not in visited:
+                        stack.append(dep)
+        
+        return reverse_deps

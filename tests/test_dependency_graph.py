@@ -111,6 +111,105 @@ class TestDependencyGraph(unittest.TestCase):
         finally:
             temp_path.unlink()
 
+    def test_reverse_dependencies_simple(self):
+        """Test reverse dependencies in linear chain A -> B -> C"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": []}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        # C is depended on by B
+        reverse_c = graph.get_reverse_dependencies("C")
+        self.assertIn("B", reverse_c)
+        self.assertIn("A", reverse_c)  # A transitively depends on C
+
+        # B is depended on by A
+        reverse_b = graph.get_reverse_dependencies("B")
+        self.assertIn("A", reverse_b)
+
+        # A has no reverse dependencies
+        reverse_a = graph.get_reverse_dependencies("A")
+        self.assertEqual(len(reverse_a), 0)
+
+    def test_reverse_dependencies_diamond(self):
+        """Test reverse dependencies in diamond: A depends on B and C, both depend on D"""
+        repo_data = {
+            "A": [("B", "*"), ("C", "*")],
+            "B": [("D", "*")],
+            "C": [("D", "*")],
+            "D": [],
+        }
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        # D is depended on by A (transitively), B, and C
+        reverse_d = graph.get_reverse_dependencies("D")
+        self.assertIn("A", reverse_d)
+        self.assertIn("B", reverse_d)
+        self.assertIn("C", reverse_d)
+        self.assertEqual(len(reverse_d), 3)
+
+        # B and C are depended on by A
+        reverse_b = graph.get_reverse_dependencies("B")
+        self.assertIn("A", reverse_b)
+
+        reverse_c = graph.get_reverse_dependencies("C")
+        self.assertIn("A", reverse_c)
+
+    def test_reverse_dependencies_with_cycle(self):
+        """Test reverse dependencies with a cycle A -> B -> C -> A"""
+        repo_data = {"A": [("B", "*")], "B": [("C", "*")], "C": [("A", "*")]}
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        # In a cycle, all nodes depend on each other transitively
+        reverse_a = graph.get_reverse_dependencies("A")
+        self.assertIn("B", reverse_a)
+        self.assertIn("C", reverse_a)
+
+        reverse_b = graph.get_reverse_dependencies("B")
+        self.assertIn("A", reverse_b)
+        self.assertIn("C", reverse_b)
+
+        reverse_c = graph.get_reverse_dependencies("C")
+        self.assertIn("A", reverse_c)
+        self.assertIn("B", reverse_c)
+
+    def test_reverse_dependencies_complex(self):
+        """Test reverse dependencies in complex graph"""
+        repo_data = {
+            "A": [("B", "*"), ("C", "*")],
+            "B": [("D", "*"), ("E", "*")],
+            "C": [("E", "*")],
+            "D": [],
+            "E": [("F", "*")],
+            "F": [],
+        }
+        provider = create_test_dependency_provider(repo_data)
+        graph = DependencyGraph()
+        graph.build_graph_dfs("A", provider)
+
+        # F is depended on by E, B, C, and A (transitively)
+        reverse_f = graph.get_reverse_dependencies("F")
+        self.assertIn("E", reverse_f)
+        self.assertIn("B", reverse_f)
+        self.assertIn("C", reverse_f)
+        self.assertIn("A", reverse_f)
+
+        # E is depended on by B, C, and A
+        reverse_e = graph.get_reverse_dependencies("E")
+        self.assertIn("B", reverse_e)
+        self.assertIn("C", reverse_e)
+        self.assertIn("A", reverse_e)
+
+        # D is only depended on by B and A
+        reverse_d = graph.get_reverse_dependencies("D")
+        self.assertIn("B", reverse_d)
+        self.assertIn("A", reverse_d)
+        self.assertNotIn("C", reverse_d)  # C does not depend on D
+
 
 if __name__ == "__main__":
     unittest.main()

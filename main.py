@@ -48,13 +48,19 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"--action",
-		choices=["print-config", "show-deps", "build-graph"],
+		choices=["print-config", "show-deps", "build-graph", "reverse-deps"],
 		default="print-config",
 		help=(
 			"Action to perform. 'print-config' prints validated parameters (Stage 1). "
 			"'show-deps' downloads/parses repo and prints direct NuGet dependencies (Stage 2). "
-			"'build-graph' builds full transitive dependency graph and prints statistics (Stage 3)."
+			"'build-graph' builds full transitive dependency graph and prints statistics (Stage 3). "
+			"'reverse-deps' finds all packages that depend on --target package (Stage 4)."
 		),
+	)
+	parser.add_argument(
+		"--target",
+		type=str,
+		help="Target package for reverse-deps action (required for --action=reverse-deps)",
 	)
 	return parser.parse_args()
 
@@ -300,6 +306,72 @@ def main() -> int:
 				print(f"  Cycle: {' -> '.join(cycle)}")
 		else:
 			print("No cycles detected")
+		return 0
+
+	if args.action == "reverse-deps":
+		# Stage 4: find all packages that depend on a target package
+		if not args.target:
+			print("--target parameter is required for reverse-deps action", file=sys.stderr)
+			return 1
+
+		if DependencyGraph is None:
+			print("Internal error: dependency graph module not available", file=sys.stderr)
+			return 1
+
+		package_name = params["package_name"]
+		target_package = args.target
+		test_repo_mode = params["test_repo_mode"]
+
+		graph = DependencyGraph()
+
+		# Build the graph first (same logic as build-graph)
+		if test_repo_mode == "local-path":
+			repo_path = Path(params["repo_source"])
+			if not repo_path.exists():
+				print(f"Test repository file not found: {repo_path}", file=sys.stderr)
+				return 1
+			try:
+				test_repo_data = parse_test_repo(repo_path)
+				provider = create_test_dependency_provider(test_repo_data)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to parse test repository: {e}", file=sys.stderr)
+				return 1
+
+		elif test_repo_mode == "remote-url":
+			if fetch_github_repo_to_temp is None:
+				print("Internal error: repo fetch module not available", file=sys.stderr)
+				return 1
+			repo_url = params["repo_source"]
+			try:
+				with tempfile.TemporaryDirectory(prefix="deps_repo_") as tmpdir:
+					repo_root = fetch_github_repo_to_temp(repo_url, Path(tmpdir))
+					if repo_root is None:
+						print(
+							"Unsupported repository URL. Only GitHub repositories are supported.",
+							file=sys.stderr,
+						)
+						return 1
+
+					def real_provider(pkg_id: str):
+						proj_file = discover_project_file(Path(repo_root), pkg_id)
+						if proj_file is None:
+							return []
+						return list(parse_dependencies_from_project(proj_file))
+
+					graph.build_graph_dfs(package_name, real_provider)
+			except Exception as e:
+				print(f"Failed to fetch or parse repository: {e}", file=sys.stderr)
+				return 1
+
+		# Find reverse dependencies
+		reverse_deps = graph.get_reverse_dependencies(target_package)
+		if reverse_deps:
+			print(f"Packages that depend on '{target_package}':")
+			for pkg in sorted(reverse_deps):
+				print(f"  {pkg}")
+		else:
+			print(f"No packages depend on '{target_package}'")
 		return 0
 
 	print("Unknown action", file=sys.stderr)
