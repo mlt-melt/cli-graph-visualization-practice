@@ -1,12 +1,12 @@
 # Визуализация графа зависимостей — Этапы 1-5
 
-Минимальное CLI‑приложение для работы с графами зависимостей пакетов NuGet. Поддерживает конфигурирование, получение прямых зависимостей, построение полного графа транзитивных зависимостей с обнаружением циклов, поиск обратных зависимостей, и визуализацию в виде D2-диаграмм и ASCII-дерева.
+Минимальное CLI‑приложение для работы с графами зависимостей пакетов NuGet. Поддерживает конфигурирование, получение прямых зависимостей из реального NuGet API (api.nuget.org), построение полного графа транзитивных зависимостей с обнаружением циклов, поиск обратных зависимостей, и визуализацию в виде D2-диаграмм и ASCII-дерева.
 
 ## 1. Общее описание
 
 Приложение решает следующие задачи:
 - **Этап 1**: Чтение и валидация INI‑конфигурации с выводом параметров.
-- **Этап 2**: Получение прямых зависимостей пакета из GitHub‑репозитория (парсинг `.csproj`, `.nuspec`, `packages.config`).
+- **Этап 2**: Получение прямых зависимостей пакета из NuGet API (api.nuget.org/v3-flatcontainer) или GitHub‑репозитория.
 - **Этап 3**: Построение полного графа транзитивных зависимостей с использованием итеративного DFS (без рекурсии), обработка циклов, режим тестового репозитория.
 - **Этап 4**: Поиск обратных зависимостей — нахождение всех пакетов, которые зависят от заданного пакета (прямо или транзитивно).
 - **Этап 5**: Визуализация графа через D2-диаграммы и ASCII-дерево с обнаружением циклических ссылок.
@@ -20,11 +20,13 @@
 - `package_name` — имя анализируемого пакета. Допустимые символы: латинские буквы, цифры, `.`, `_`, `-`. Должно начинаться с буквы/цифры. Длина: 1..128.
 - `repo_source` — источник репозитория:
   - если `test_repo_mode=local-path`, это путь к файлу тестового репозитория (см. формат ниже);
+  - если `test_repo_mode=nuget`, это URL NuGet API (например, `https://api.nuget.org/v3-flatcontainer`);
   - если `test_repo_mode=remote-url`, это валидный URL GitHub репозитория (схемы `http`, `https`, `git`).
-- `test_repo_mode` — режим работы с репозиторием: одно из `local-path`, `remote-url`.
+- `test_repo_mode` — режим работы с репозиторием: одно из `local-path`, `nuget`, `remote-url`.
 - `output_mode` — режим вывода: одно из `ascii-tree`, `list` (на Этапах 1-3 влияет только на валидацию).
+- `package_version` — (опционально) версия пакета для режима `nuget`. Если не указана, используется последняя версия.
 
-Примеры конфигураций: см. `configs/config.example.ini`, `configs/test_simple.ini` и др.
+Примеры конфигураций: см. `configs/config.example.ini`, `configs/config.nuget.ini`, `configs/config.avalonia.ini` и др.
 
 ### Формат тестового репозитория
 
@@ -40,7 +42,7 @@ D:
 ### Режимы работы (`--action`)
 
 - `print-config` — Этап 1: вывести параметры конфигурации (по умолчанию).
-- `show-deps` — Этап 2: загрузить репозиторий (GitHub), извлечь и вывести прямые зависимости.
+- `show-deps` — Этап 2: загрузить пакет из NuGet API или GitHub репозитория, извлечь и вывести прямые зависимости.
 - `build-graph` — Этап 3: построить полный граф транзитивных зависимостей через итеративный DFS, вывести статистику (узлы, рёбра, циклы).
 - `reverse-deps` — Этап 4: найти все пакеты, которые зависят от `--target` пакета (прямо или транзитивно). Требует указать `--target`.
 - `visualize` — Этап 5: экспортировать граф в D2-диаграмму. Сохраняет в файл `.d2` и опционально рендерит в PNG (если установлен `d2` CLI).
@@ -83,6 +85,12 @@ python .\main.py --config .\configs\test_diamond.ini --action build-graph
 
 # Для реального GitHub репозитория (remote-url):
 python .\main.py --config .\configs\config.files.ini --action build-graph
+
+# Для NuGet API (реальные пакеты из nuget.org):
+python .\main.py --config .\configs\config.nuget.ini --action show-deps
+python .\main.py --config .\configs\config.nuget.ini --action build-graph
+python .\main.py --config .\configs\config.avalonia.ini --action show-deps
+python .\main.py --config .\configs\config.avalonia.ini --action build-graph
 
 # Этап 4: поиск обратных зависимостей (кто зависит от целевого пакета)
 python .\main.py --config .\configs\test_simple.ini --action reverse-deps --target C
@@ -145,6 +153,41 @@ Configuration validation failed:
 
 ### Этап 2 — вывод прямых зависимостей
 
+#### NuGet API — зависимости Newtonsoft.Json (latest)
+
+```powershell
+python .\main.py --config .\configs\config.nuget.ini --action show-deps
+```
+
+Вывод:
+```
+Microsoft.CSharp 4.3.0
+NETStandard.Library 1.6.1
+System.ComponentModel.TypeConverter 4.3.0
+System.Runtime.Serialization.Primitives 4.3.0
+System.Runtime.Serialization.Formatters 4.3.0
+System.Xml.XmlDocument 4.3.0
+```
+
+#### NuGet API — зависимости Avalonia 11.3.9
+
+```powershell
+python .\main.py --config .\configs\config.avalonia.ini --action show-deps
+```
+
+Вывод:
+```
+Avalonia.BuildServices 11.3.2
+Avalonia.Remote.Protocol 11.3.9
+System.Diagnostics.DiagnosticSource 8.0.1
+MicroCom.Runtime 0.11.0
+Microsoft.Bcl.AsyncInterfaces 6.0.0
+System.ComponentModel.Annotations 4.5.0
+System.Memory 4.5.5
+```
+
+#### GitHub репозиторий — зависимости Files
+
 Пример вывода прямых зависимостей реального репозитория Files:
 
 ```powershell
@@ -162,6 +205,32 @@ Microsoft.Windows.CsWinRT *
 ```
 
 ### Этап 3 — построение графа зависимостей
+
+#### NuGet API — граф Newtonsoft.Json
+
+```powershell
+python .\main.py --config .\configs\config.nuget.ini --action build-graph
+```
+
+Вывод:
+```
+Nodes: 96
+Edges: 518
+No cycles detected
+```
+
+#### NuGet API — граф Avalonia 11.3.9
+
+```powershell
+python .\main.py --config .\configs\config.avalonia.ini --action build-graph
+```
+
+Вывод:
+```
+Nodes: 92
+Edges: 461
+No cycles detected
+```
 
 #### Простая линейная цепочка (A → B → C)
 
@@ -422,12 +491,13 @@ C -> A: {style.stroke: red; style.stroke-width: 3}
 ## Примечания
 
 - **Этап 1**: Только чтение и валидация конфигурации.
-- **Этап 2**: Добавлена загрузка репозитория по URL (ограничение: GitHub), поиск `.nuspec`/`.csproj` и извлечение прямых зависимостей. Менеджеры пакетов и сторонние библиотеки не используются.
-- **Этап 3**: Реализовано построение полного графа транзитивных зависимостей с использованием **итеративного DFS (без рекурсии)**. Обрабатываются циклические зависимости. Поддерживается режим тестирования с локальными файлами (`test_repo_mode=local-path`).
+- **Этап 2**: Добавлена загрузка зависимостей из **NuGet API** (api.nuget.org/v3-flatcontainer) — реальный менеджер пакетов. Также поддерживается режим GitHub для загрузки `.nuspec`/`.csproj`. Менеджеры пакетов и сторонние библиотеки не используются.
+- **Этап 3**: Реализовано построение полного графа транзитивных зависимостей с использованием **итеративного DFS (без рекурсии)**. Обрабатываются циклические зависимости. Поддерживается режим тестирования с локальными файлами (`test_repo_mode=local-path`) и реальный NuGet API (`test_repo_mode=nuget`).
 - **Этап 4**: Добавлен поиск **обратных зависимостей** (reverse dependencies) — нахождение всех пакетов, которые зависят от заданного пакета (прямо или транзитивно). Использует итеративный обход графа для каждого узла.
 - **Этап 5**: Добавлена **визуализация** графа зависимостей:
   - **D2-диаграммы** — текстовый формат описания графов с возможностью рендеринга в PNG/SVG. Циклы выделяются красным цветом.
   - **ASCII-дерево** — отображение иерархии зависимостей с использованием box-drawing символов (`├──`, `└──`, `│`). Циклические ссылки помечаются `[CIRCULAR]`.
+- **NuGet API**: Используется V3 Flat Container API для получения версий пакетов и .nuspec файлов. URL формат: `api.nuget.org/v3-flatcontainer/{package}/{version}/{package}.nuspec`.
 - **Сравнение со штатными инструментами**: см. `output/COMPARISON.md` для детального анализа различий с `dotnet list package --include-transitive`.
 
 ## Структура проекта
@@ -437,6 +507,8 @@ C -> A: {style.stroke: red; style.stroke-width: 3}
 ├── configs/               # Конфигурационные файлы
 │   ├── config.example.ini
 │   ├── config.files.ini
+│   ├── config.nuget.ini   # NuGet API (Newtonsoft.Json)
+│   ├── config.avalonia.ini # NuGet API (Avalonia 11.3.9)
 │   ├── test_simple.ini
 │   ├── test_cycle.ini
 │   ├── test_diamond.ini
@@ -454,10 +526,12 @@ C -> A: {style.stroke: red; style.stroke-width: 3}
 │   └── example3_complex.d2
 ├── tests/                 # Юнит-тесты
 │   ├── test_nuget_parser.py
+│   ├── test_nuget_api.py  # Тесты NuGet API клиента
 │   └── test_dependency_graph.py
 ├── main.py                # Основной CLI-модуль
 ├── dependency_graph.py    # Построение графа через итеративный DFS
 ├── nuget_parser.py        # Парсинг .csproj/.nuspec/packages.config
+├── nuget_api.py           # Клиент NuGet V3 Flat Container API
 ├── repo_fetch.py          # Загрузка GitHub репозиториев
 ├── test_repo.py           # Работа с тестовыми репозиториями
 └── README.md              # Документация

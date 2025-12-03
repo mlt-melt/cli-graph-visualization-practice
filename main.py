@@ -17,6 +17,12 @@ try:
 	)
 	from dependency_graph import DependencyGraph
 	from test_repo import parse_test_repo, create_test_dependency_provider
+	from nuget_api import (
+		get_package_dependencies,
+		get_latest_version,
+		create_nuget_dependency_provider,
+		NUGET_API_BASE,
+	)
 except Exception:
 	# Allow running even if modules not yet available during partial execution
 	fetch_github_repo_to_temp = None  # type: ignore
@@ -25,10 +31,15 @@ except Exception:
 	DependencyGraph = None  # type: ignore
 	parse_test_repo = None  # type: ignore
 	create_test_dependency_provider = None  # type: ignore
+	get_package_dependencies = None  # type: ignore
+	get_latest_version = None  # type: ignore
+	create_nuget_dependency_provider = None  # type: ignore
+	NUGET_API_BASE = "https://api.nuget.org/v3-flatcontainer"  # type: ignore
 
 
 APP_SECTION = "app"
-TEST_REPO_MODES = {"local-path", "remote-url"}
+# Modes: local-path (test fixtures), nuget (real NuGet API), remote-url (deprecated GitHub)
+TEST_REPO_MODES = {"local-path", "nuget", "remote-url"}
 OUTPUT_MODES = {"ascii-tree", "list"}
 
 
@@ -112,6 +123,7 @@ def validate_and_normalize(raw: dict) -> tuple[dict, list[str]]:
 	repo_source = (raw["repo_source"] or "").strip()
 	test_repo_mode = (raw["test_repo_mode"] or "").strip().lower()
 	output_mode = (raw["output_mode"] or "").strip().lower()
+	package_version = (raw.get("package_version") or "").strip()  # Optional
 
 	# package_name
 	if not is_valid_package_name(package_name):
@@ -150,6 +162,14 @@ def validate_and_normalize(raw: dict) -> tuple[dict, list[str]]:
 			else:
 				# Normalize to absolute path for output clarity
 				out["repo_source"] = str(p.resolve())
+		elif test_repo_mode == "nuget":
+			# For nuget mode, repo_source should be the NuGet API base URL
+			if not is_valid_url(repo_source):
+				errors.append(
+					f"repo_source must be a valid URL for test_repo_mode=nuget: {repo_source}"
+				)
+			else:
+				out["repo_source"] = repo_source.rstrip("/")
 		elif test_repo_mode == "remote-url":
 			if not is_valid_url(repo_source):
 				errors.append(
@@ -160,6 +180,10 @@ def validate_and_normalize(raw: dict) -> tuple[dict, list[str]]:
 		else:
 			# If mode itself invalid, skip validating source to avoid noise
 			pass
+
+	# package_version (optional, only for nuget mode)
+	if package_version:
+		out["package_version"] = package_version
 
 	return out, errors
 
@@ -173,7 +197,7 @@ def load_user_parameters(cfg: configparser.ConfigParser) -> dict:
 	# Fetch raw values as strings; don't provide defaults so we can detect missing keys
 	raw = {
 		key: section.get(key, fallback=None)
-		for key in ["package_name", "repo_source", "test_repo_mode", "output_mode"]
+		for key in ["package_name", "repo_source", "test_repo_mode", "output_mode", "package_version"]
 	}
 	validated, errors = validate_and_normalize(raw)
 	if errors:
@@ -185,10 +209,11 @@ def load_user_parameters(cfg: configparser.ConfigParser) -> dict:
 
 def print_parameters(params: dict) -> None:
 	# Print exactly as key=value lines, in a stable order
-	order = ["package_name", "repo_source", "test_repo_mode", "output_mode"]
+	order = ["package_name", "repo_source", "test_repo_mode", "output_mode", "package_version"]
 	for key in order:
 		value = params.get(key, "")
-		print(f"{key}={value}")
+		if value:  # Only print if has value
+			print(f"{key}={value}")
 
 
 def main() -> int:
@@ -206,50 +231,78 @@ def main() -> int:
 		return 0
 
 	if args.action == "show-deps":
-		# Stage 2: print all direct dependencies of the given package using repo URL
-		if params.get("test_repo_mode") != "remote-url":
+		# Stage 2: print all direct dependencies of the given package
+		test_repo_mode = params.get("test_repo_mode")
+		package_name = params["package_name"]
+
+		if test_repo_mode == "nuget":
+			# Use NuGet API to fetch dependencies
+			if get_package_dependencies is None:
+				print("Internal error: nuget_api module not available", file=sys.stderr)
+				return 1
+			
+			nuget_url = params.get("repo_source", NUGET_API_BASE)
+			version = params.get("package_version")  # None means use latest
+			
+			try:
+				deps = get_package_dependencies(package_name, version, nuget_url)
+			except ValueError as e:
+				print(f"Error: {e}", file=sys.stderr)
+				return 1
+			except Exception as e:
+				print(f"Failed to fetch from NuGet API: {e}", file=sys.stderr)
+				return 1
+			
+			# Print direct dependencies, one per line: name versionSpec
+			for dep_id, version_spec in deps:
+				print(f"{dep_id} {version_spec}")
+			return 0
+
+		elif test_repo_mode == "remote-url":
+			# Deprecated GitHub mode
+			if fetch_github_repo_to_temp is None:
+				print("Internal error: repo fetch module not available", file=sys.stderr)
+				return 1
+
+			repo_url = params["repo_source"]
+
+			# Fetch repository to a temp directory (supports GitHub URLs in this prototype)
+			try:
+				with tempfile.TemporaryDirectory(prefix="deps_repo_") as tmpdir:
+					repo_root = fetch_github_repo_to_temp(repo_url, Path(tmpdir))
+					if repo_root is None:
+						print(
+							"Unsupported repository URL. Only GitHub repositories are supported at this stage.",
+							file=sys.stderr,
+						)
+						return 1
+
+					# Discover project file for the given package
+					proj_file = discover_project_file(Path(repo_root), package_name)
+					if proj_file is None:
+						print(
+							f"Cannot find project for package '{package_name}' (.csproj or .nuspec).",
+							file=sys.stderr,
+						)
+						return 1
+
+					# Parse dependencies
+					deps = list(parse_dependencies_from_project(proj_file))
+			except Exception as e:
+				print(f"Failed to fetch or parse repository: {e}", file=sys.stderr)
+				return 1
+
+			# Print direct dependencies, one per line: name versionSpec
+			for dep_id, version in deps:
+				print(f"{dep_id} {version}")
+			return 0
+
+		else:
 			print(
-				"For --action=show-deps the config must use test_repo_mode=remote-url.",
+				f"Action show-deps requires test_repo_mode=nuget or remote-url, got '{test_repo_mode}'",
 				file=sys.stderr,
 			)
 			return 1
-		if fetch_github_repo_to_temp is None:
-			print("Internal error: repo fetch module not available", file=sys.stderr)
-			return 1
-
-		repo_url = params["repo_source"]
-		package_name = params["package_name"]
-
-		# Fetch repository to a temp directory (supports GitHub URLs in this prototype)
-		try:
-			with tempfile.TemporaryDirectory(prefix="deps_repo_") as tmpdir:
-				repo_root = fetch_github_repo_to_temp(repo_url, Path(tmpdir))
-				if repo_root is None:
-					print(
-						"Unsupported repository URL. Only GitHub repositories are supported at this stage.",
-						file=sys.stderr,
-					)
-					return 1
-
-				# Discover project file for the given package
-				proj_file = discover_project_file(Path(repo_root), package_name)
-				if proj_file is None:
-					print(
-						f"Cannot find project for package '{package_name}' (.csproj or .nuspec).",
-						file=sys.stderr,
-					)
-					return 1
-
-				# Parse dependencies
-				deps = list(parse_dependencies_from_project(proj_file))
-		except Exception as e:
-			print(f"Failed to fetch or parse repository: {e}", file=sys.stderr)
-			return 1
-
-		# Print direct dependencies, one per line: name versionSpec
-		for dep_id, version in deps:
-			print(f"{dep_id} {version}")
-		return 0
 
 	if args.action == "build-graph":
 		# Stage 3: build full transitive dependency graph
@@ -276,8 +329,29 @@ def main() -> int:
 				print(f"Failed to parse test repository: {e}", file=sys.stderr)
 				return 1
 
+		elif test_repo_mode == "nuget":
+			# NuGet API mode: fetch dependencies from api.nuget.org
+			if create_nuget_dependency_provider is None:
+				print("Internal error: nuget_api module not available", file=sys.stderr)
+				return 1
+			
+			nuget_url = params.get("repo_source", NUGET_API_BASE)
+			version = params.get("package_version")
+			
+			# Pre-populate version cache with specified version
+			version_cache = {}
+			if version:
+				version_cache[package_name] = version
+			
+			try:
+				provider = create_nuget_dependency_provider(nuget_url, version_cache=version_cache)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to build graph from NuGet API: {e}", file=sys.stderr)
+				return 1
+
 		elif test_repo_mode == "remote-url":
-			# Real repository mode: fetch from GitHub
+			# Deprecated GitHub mode: fetch from GitHub
 			if fetch_github_repo_to_temp is None:
 				print("Internal error: repo fetch module not available", file=sys.stderr)
 				return 1
@@ -345,6 +419,24 @@ def main() -> int:
 				print(f"Failed to parse test repository: {e}", file=sys.stderr)
 				return 1
 
+		elif test_repo_mode == "nuget":
+			if create_nuget_dependency_provider is None:
+				print("Internal error: nuget_api module not available", file=sys.stderr)
+				return 1
+			
+			nuget_url = params.get("repo_source", NUGET_API_BASE)
+			version = params.get("package_version")
+			version_cache = {}
+			if version:
+				version_cache[package_name] = version
+			
+			try:
+				provider = create_nuget_dependency_provider(nuget_url, version_cache=version_cache)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to build graph from NuGet API: {e}", file=sys.stderr)
+				return 1
+
 		elif test_repo_mode == "remote-url":
 			if fetch_github_repo_to_temp is None:
 				print("Internal error: repo fetch module not available", file=sys.stderr)
@@ -405,6 +497,24 @@ def main() -> int:
 				graph.build_graph_dfs(package_name, provider)
 			except Exception as e:
 				print(f"Failed to parse test repository: {e}", file=sys.stderr)
+				return 1
+
+		elif test_repo_mode == "nuget":
+			if create_nuget_dependency_provider is None:
+				print("Internal error: nuget_api module not available", file=sys.stderr)
+				return 1
+			
+			nuget_url = params.get("repo_source", NUGET_API_BASE)
+			version = params.get("package_version")
+			version_cache = {}
+			if version:
+				version_cache[package_name] = version
+			
+			try:
+				provider = create_nuget_dependency_provider(nuget_url, version_cache=version_cache)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to build graph from NuGet API: {e}", file=sys.stderr)
 				return 1
 
 		elif test_repo_mode == "remote-url":
@@ -478,6 +588,24 @@ def main() -> int:
 				graph.build_graph_dfs(package_name, provider)
 			except Exception as e:
 				print(f"Failed to parse test repository: {e}", file=sys.stderr)
+				return 1
+
+		elif test_repo_mode == "nuget":
+			if create_nuget_dependency_provider is None:
+				print("Internal error: nuget_api module not available", file=sys.stderr)
+				return 1
+			
+			nuget_url = params.get("repo_source", NUGET_API_BASE)
+			version = params.get("package_version")
+			version_cache = {}
+			if version:
+				version_cache[package_name] = version
+			
+			try:
+				provider = create_nuget_dependency_provider(nuget_url, version_cache=version_cache)
+				graph.build_graph_dfs(package_name, provider)
+			except Exception as e:
+				print(f"Failed to build graph from NuGet API: {e}", file=sys.stderr)
 				return 1
 
 		elif test_repo_mode == "remote-url":
